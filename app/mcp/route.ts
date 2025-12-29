@@ -70,20 +70,119 @@ const coreHandler = createMcpHandler(
   }
 );
 
-// Wrapper to force Accept header to include both application/json and text/event-stream
+const manualInitialize = {
+  jsonrpc: "2.0",
+  result: {
+    protocolVersion: "2025-03-26",
+    capabilities: {
+      tools: { listChanged: true },
+    },
+    serverInfo: {
+      name: "httpxfinish",
+      version: "1.0.0",
+    },
+  },
+};
+
+// Wrapper to normalize Accept header and provide a fallback for clients missing it
 const handler = async (req: Request) => {
-  const incomingAccept = req.headers.get("accept") || "";
+  const accept = req.headers.get("accept") || "";
+
+  // Fallback path: some clients (including Render MCP tester) omit text/event-stream.
+  if (!accept.includes("application/json") || !accept.includes("text/event-stream")) {
+    if (req.method === "POST") {
+      try {
+        const body = await req.json();
+        const { id, method, params } = body;
+
+        if (method === "initialize") {
+          return new Response(JSON.stringify({ ...manualInitialize, id }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+
+        if (method === "tools/list") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id,
+              result: {
+                tools: [
+                  {
+                    name: "httpx",
+                    description:
+                      "Scans target domains with httpx and lists active HTTP/HTTPS services.",
+                    inputSchema: {
+                      type: "object",
+                      properties: {
+                        target: { type: "array", items: { type: "string" } },
+                        ports: { type: "array", items: { type: "number" } },
+                        probes: { type: "array", items: { type: "string" } },
+                      },
+                      required: ["target"],
+                    },
+                  },
+                ],
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        if (method === "tools/call") {
+          const { name, arguments: args = {} } = params || {};
+          if (name === "httpx") {
+            const targets: string[] = args.target || [];
+            const ports: number[] | undefined = args.ports;
+            const probes: string[] | undefined = args.probes;
+            if (!targets || targets.length === 0) {
+              return new Response(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id,
+                  error: { code: -32602, message: "target is required" },
+                }),
+                { status: 400, headers: { "content-type": "application/json" } }
+              );
+            }
+            const cmd: string[] = ["-u", targets.join(","), "-silent"];
+            if (ports?.length) cmd.push("-p", ports.join(","));
+            if (probes?.length) probes.forEach((p: string) => cmd.push(`-${p}`));
+            const command = `httpx ${cmd.join(" ")}`;
+            return new Response(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id,
+                result: {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Run this command locally (httpx must be installed):\n${command}`,
+                    },
+                  ],
+                },
+              }),
+              { status: 200, headers: { "content-type": "application/json" } }
+            );
+          }
+        }
+      } catch (err) {
+        console.error("Manual fallback error", err);
+      }
+    }
+    // If not handled above, fall through to core handler but patch Accept header
+  }
+
+  // Normal path: ensure Accept header includes both values for createMcpHandler
   const headers = new Headers(req.headers);
   headers.set("accept", "application/json, text/event-stream");
+
   const modifiedRequest = new Request(req.url, {
     method: req.method,
     headers,
     body: req.body,
   });
-
-  // Log for debugging Accept header behavior
-  console.log("incoming accept:", incomingAccept);
-  console.log("modified accept:", modifiedRequest.headers.get("accept"));
 
   return coreHandler(modifiedRequest as any);
 };
