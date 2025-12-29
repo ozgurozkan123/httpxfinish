@@ -73,6 +73,7 @@ const baseHandler = createMcpHandler(
 
 const handler = async (req: Request) => {
   const accept = req.headers.get("accept") || "";
+  console.log("Incoming Accept header:", accept);
   if (!accept.includes("text/event-stream")) {
     const headers = new Headers(req.headers);
     headers.set("accept", "application/json, text/event-stream");
