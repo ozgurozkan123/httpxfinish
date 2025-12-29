@@ -61,7 +61,7 @@ const coreHandler = createMcpHandler(
         },
       },
     },
-  },
+  } as any,
   {
     basePath: "",
     verboseLogs: true,
