@@ -72,14 +72,18 @@ const coreHandler = createMcpHandler(
 
 // Wrapper to force Accept header to include both application/json and text/event-stream
 const handler = async (req: Request) => {
+  const incomingAccept = req.headers.get("accept") || "";
   const headers = new Headers(req.headers);
   headers.set("accept", "application/json, text/event-stream");
-
   const modifiedRequest = new Request(req.url, {
     method: req.method,
     headers,
     body: req.body,
   });
+
+  // Log for debugging Accept header behavior
+  console.log("incoming accept:", incomingAccept);
+  console.log("modified accept:", modifiedRequest.headers.get("accept"));
 
   return coreHandler(modifiedRequest as any);
 };
