@@ -71,21 +71,118 @@ const baseHandler = createMcpHandler(
   }
 );
 
+const manualInitialize = {
+  jsonrpc: "2.0",
+  result: {
+    protocolVersion: "2025-03-26",
+    capabilities: {
+      tools: { listChanged: true },
+    },
+    serverInfo: {
+      name: "httpxfinish",
+      version: "1.0.0",
+    },
+  },
+};
+
 const handler = async (req: Request) => {
   const accept = req.headers.get("accept") || "";
   console.log("Incoming Accept header:", accept);
-  if (!accept.includes("text/event-stream")) {
-    const headers = new Headers(req.headers);
-    headers.set("accept", "application/json, text/event-stream");
-    const cloned = req.clone();
-    const modified = new Request(req.url, {
-      method: req.method,
-      headers,
-      body: cloned.body,
-    });
-    return baseHandler(modified as any);
+  // Minimal manual MCP responses to bypass strict accept checks
+  if (req.method === "POST") {
+    try {
+      const bodyText = await req.text();
+      const data = JSON.parse(bodyText);
+      const { id, method, params } = data;
+
+      if (method === "initialize") {
+        return new Response(
+          JSON.stringify({ ...manualInitialize, id }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+
+      if (method === "tools/list") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            result: {
+              tools: [
+                {
+                  name: "httpx",
+                  description:
+                    "Scans target domains with httpx and lists active HTTP/HTTPS services.",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      target: { type: "array", items: { type: "string" } },
+                      ports: { type: "array", items: { type: "number" } },
+                      probes: { type: "array", items: { type: "string" } },
+                    },
+                    required: ["target"],
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+
+      if (method === "tools/call") {
+        const { name, arguments: args = {} } = params || {};
+        if (name === "httpx") {
+          const targets: string[] = args.target || [];
+          const ports: number[] | undefined = args.ports;
+          const probes: string[] | undefined = args.probes;
+          if (!targets || targets.length === 0) {
+            return new Response(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id,
+                error: { code: -32602, message: "target is required" },
+              }),
+              { status: 400, headers: { "content-type": "application/json" } }
+            );
+          }
+          const cmd: string[] = ["-u", targets.join(","), "-silent"];
+          if (ports?.length) cmd.push("-p", ports.join(","));
+          if (probes?.length) probes.forEach((p) => cmd.push(`-${p}`));
+          const command = `httpx ${cmd.join(" ")}`;
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id,
+              result: {
+                content: [
+                  {
+                    type: "text",
+                    text: `Run this command locally (httpx must be installed):\n${command}`,
+                  },
+                ],
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+      }
+    } catch (err) {
+      console.error("manual handler parse error", err);
+    }
   }
-  return baseHandler(req as any);
+
+  const headers = new Headers(req.headers);
+  if (!accept.includes("text/event-stream")) {
+    headers.set("accept", "application/json, text/event-stream");
+  }
+  const cloned = req.clone();
+  const modified = new Request(req.url, {
+    method: req.method,
+    headers,
+    body: cloned.body,
+  });
+  return baseHandler(modified as any);
 };
 
 export { handler as GET, handler as POST, handler as DELETE };
